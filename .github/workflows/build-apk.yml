@@ -15,9 +15,15 @@ jobs:
           java-version: '17'
       - name: Restore strategy source
         run: cat strategy.part1 strategy.part2 > app/src/main/java/com/hybridtrader/v36monitor/Strategy.kt
-      - name: Android SDK
-        uses: android-actions/setup-android@v3
-      - run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - name: Configure Android SDK
+        run: |
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          SM="$SDK/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$SM" || SM=$(find "$SDK/cmdline-tools" -type f -name sdkmanager -perm -111 | head -1)
+          yes | "$SM" --licenses >/dev/null 2>&1 || true
+          "$SM" "platforms;android-35" "build-tools;35.0.0"
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
