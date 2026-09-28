@@ -1,0 +1,53 @@
+package com.hybridtrader.v36monitor
+
+import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
+
+/**
+ * Hybrid V3.6 x2 - bar-by-bar replay over CLOSED 4H candles only.
+ * The 2.0x multiplier is applied once, to the final quantity, and nowhere else.
+ */
+object Strategy {
+    const val INTERVAL = 4L * 3600L * 1000L
+    private const val MIN_TICK = 0.01
+    private const val START_EQUITY = 10000.0
+    private const val SIZE_MULT = 2.0
+
+    class Analysis(
+        val candles: List<Candle>,
+        val closedCount: Int,
+        val ema50: DoubleArray,
+        val ema200: DoubleArray,
+        val regime: String,
+        val rangeHigh: Double,
+        val rangeLow: Double,
+        val rangeMid: Double,
+        val signals: List<TradeSignal>,
+        val openSignal: TradeSignal?
+    )
+    private class Pos(val sig: TradeSignal,val isLong:Boolean,val trend:Boolean,val entry:Double,val risk:Double,val target:Double,var stop:Double,var extreme:Double)
+    fun analyze(all: List<Candle>): Analysis {
+        val closedAll=all.filter{it.closed}.sortedBy{it.openTime};var startIdx=0
+        for(i in 1 until closedAll.size)if(closedAll[i].openTime-closedAll[i-1].openTime!=INTERVAL)startIdx=i
+        val closed=closedAll.subList(startIdx,closedAll.size);val lastOpen=closed.lastOrNull()?.openTime?:Long.MIN_VALUE
+        val forming=all.filter{!it.closed&&it.openTime>lastOpen}.maxByOrNull{it.openTime};val display:List<Candle>=if(forming!=null)closed+forming else closed.toList()
+        val n=closed.size;val nan=Double.NaN
+        if(n<260){val e=DoubleArray(n){nan};return Analysis(display,n,e,e,"NEUTRAL",nan,nan,nan,emptyList(),null)}
+        val o=DoubleArray(n){closed[it].open};val h=DoubleArray(n){closed[it].high};val l=DoubleArray(n){closed[it].low};val c=DoubleArray(n){closed[it].close}
+        val ema50=Ind.ema(c,50);val ema200=Ind.ema(c,200);val rsi=Ind.rsi(c,14);val atr=Ind.atr(h,l,c,14);val dmi=Ind.dmi(h,l,c,14,14);val adx=dmi.adx;val pdi=dmi.plus;val mdi=dmi.minus;val atrBase=Ind.sma(atr,20)
+        val absChg=DoubleArray(n){if(it==0)nan else abs(c[it]-c[it-1])};val pathAvg=Ind.sma(absChg,20)
+        val er=DoubleArray(n){i->if(i<20||pathAvg[i].isNaN())nan else {val pathLen=pathAvg[i]*20.0;if(pathLen>0.0)abs(c[i]-c[i-20])/pathLen else 1.0}}
+        val lsh=DoubleArray(n){nan};val psh=DoubleArray(n){nan};val lsl=DoubleArray(n){nan};val psl=DoubleArray(n){nan}
+        var curLsh=nan;var curPsh=nan;var curLsl=nan;var curPsl=nan
+        for(i in 0 until n){if(i>=6){val p=i-3;var isH=true;var isL=true;for(k in 1..3){if(!(h[p]>h[p-k]&&h[p]>h[p+k]))isH=false;if(!(l[p]<l[p-k]&&l[p]<l[p+k]))isL=false};if(isH){curPsh=curLsh;curLsh=h[p]};if(isL){curPsl=curLsl;curLsl=l[p]}};lsh[i]=curLsh;psh[i]=curPsh;lsl[i]=curLsl;psl[i]=curPsl}
+        val strongBull=BooleanArray(n);val strongBear=BooleanArray(n)
+        for(i in 4 until n){val e50=ema50[i];val e200=ema200[i];val a=atr[i];if(e50.isNaN()||e200.isNaN()||ema50[i-4].isNaN()||a.isNaN()||a<=0.0||rsi[i].isNaN()||adx[i].isNaN()||pdi[i].isNaN()||mdi[i].isNaN()||er[i].isNaN())continue;val slope=e50-ema50[i-4];val spread=abs(e50-e200)/a;var bs=0;var rs=0;if(e50>e200)bs++;if(e50<e200)rs++;if(slope>a*.10)bs++;if(slope< -a*.10)rs++;if(pdi[i]>mdi[i])bs++;if(mdi[i]>pdi[i])rs++;if(rsi[i]>50)bs++;if(rsi[i]<50)rs++;if(c[i]>e50)bs++;if(c[i]<e50)rs++;if(spread>=.60){bs++;rs++};if(er[i]>=.25){bs++;rs++};strongBull[i]=e50>e200&&adx[i]>=15&&bs>=5;strongBear[i]=e50<e200&&adx[i]>=15&&rs>=5}
+        val confBull=BooleanArray(n){it>=1&&strongBull[it]&&strongBull[it-1]};val confBear=BooleanArray(n){it>=1&&strongBear[it]&&strongBear[it-1]}
+        val rHigh=DoubleArray(n){nan};val rLow=DoubleArray(n){nan}
+        for(i in 21 until n){var mx=-Double.MAX_VALUE;var mn=Double.MAX_VALUE;for(k in i-21..i-2){mx=max(mx,h[k]);mn=min(mn,l[k])};rHigh[i]=mx;rLow[i]=mn}
+        val rangeOk=BooleanArray(n)
+        for(i in 21 until n){val ab=atrBase[i];if(ab.isNaN()||ab<=0||adx[i].isNaN()||er[i].isNaN())continue;val wAtr=(rHigh[i]-rLow[i])/ab;val score=(if(adx[i]<18)1 else 0)+(if(er[i]<.30)1 else 0);rangeOk[i]=score>=2&&wAtr>=2&&wAtr<=8&&c[i]>=rLow[i]&&c[i]<=rHigh[i]&&!confBull[i]&&!confBear[i]}
+        val regime=Array(n){i->if(confBull[i])"TREND BULL" else if(confBear[i])"TREND BEAR" else if(rangeOk[i])"RANGE" else "NEUTRAL"}
+        var equity=START_EQUITY;var pos:Pos?=null;val sigs=ArrayList<TradeSignal>()
+        fun finish(p:Pos,px:Double,i:Int){val q=p.sig.qty;val pnl=if(p.isLong)(px-p.entry)*q else(p.entry-px)*q;val r=pnl/(q*p.risk);equity+=pnl;p.sig.status="CLOSED";p.sig.result=if(abs(r)<.02)"BREAKEVEN" else 
