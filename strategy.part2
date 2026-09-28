@@ -1,0 +1,60 @@
+if (pnl > 0.0) "WIN" else "LOSS"
+            p.sig.pnl = pnl
+            p.sig.rMultiple = r
+            p.sig.exitTime = closed[i].closeTime
+            p.sig.exitPrice = px
+        }
+
+        for (i in 1 until n) {
+            val p = pos
+            if (p != null) {
+                var ex = nan
+                if (p.isLong) {
+                    if (l[i] <= p.stop) ex = min(o[i], p.stop)
+                    else if (!p.trend && h[i] >= p.target) ex = p.target
+                } else {
+                    if (h[i] >= p.stop) ex = max(o[i], p.stop)
+                    else if (!p.trend && l[i] <= p.target) ex = p.target
+                }
+                if (!ex.isNaN()) { finish(p, ex, i); pos = null }
+                else if (p.trend && !atr[i].isNaN()) {
+                    if (p.isLong) {
+                        p.extreme=max(p.extreme,h[i]);if(p.extreme-p.entry>=1.25*p.risk)p.stop=max(p.stop,p.entry)
+                        val weak=adx[i]<adx[i-1]&&ema50[i]<ema50[i-1];p.stop=max(p.stop,p.extreme-atr[i]*(if(weak)3.25 else 4.0))
+                    } else {
+                        p.extreme=min(p.extreme,l[i]);if(p.entry-p.extreme>=1.25*p.risk)p.stop=min(p.stop,p.entry)
+                        val weak=adx[i]<adx[i-1]&&ema50[i]>ema50[i-1];p.stop=min(p.stop,p.extreme+atr[i]*(if(weak)3.25 else 4.0))
+                    }
+                }
+            }
+            if(pos!=null)continue
+            val ready=i>=22&&!ema200[i].isNaN()&&!ema50[i].isNaN()&&!atr[i].isNaN()&&!atrBase[i].isNaN()&&!rsi[i].isNaN()&&!adx[i].isNaN()&&!er[i].isNaN()&&!rHigh[i].isNaN()
+            if(!ready)continue
+            val entry=c[i];val a=atr[i];var dir=0;var isTrend=false;var cls="";var stopPx=nan;var targetPx=nan;var riskPct=0.0
+            val longBreak=!lsh[i].isNaN()&&!lsh[i-1].isNaN()&&c[i]>lsh[i]&&c[i-1]<=lsh[i-1]
+            val longPull=l[i]<=ema50[i]&&c[i]>ema50[i]&&c[i]>o[i]&&c[i]>h[i-1]
+            val bullStruct=!lsl[i].isNaN()&&!psl[i].isNaN()&&lsl[i]>psl[i]
+            val trendLong=!rangeOk[i]&&bullStruct&&ema50[i]>ema200[i]&&rsi[i]>50&&adx[i]>=15&&(longBreak||longPull)
+            val shortBreak=!lsl[i].isNaN()&&!lsl[i-1].isNaN()&&c[i]<lsl[i]&&c[i-1]>=lsl[i-1]
+            val shortPull=h[i]>=ema50[i]&&c[i]<ema50[i]&&c[i]<o[i]&&c[i]<l[i-1]
+            val bearStruct=!lsh[i].isNaN()&&!psh[i].isNaN()&&lsh[i]<psh[i]
+            val trendShort=!rangeOk[i]&&bearStruct&&ema50[i]<ema200[i]&&rsi[i]<50&&adx[i]>=15&&(shortBreak||shortPull)
+            if(trendLong){dir=1;isTrend=true;cls=if(longBreak)"TREND_BREAKOUT" else "TREND_PULLBACK";stopPx=entry-a*1.5}
+            else if(trendShort){dir=-1;isTrend=true;cls=if(shortBreak)"TREND_BREAKOUT" else "TREND_PULLBACK";stopPx=entry+a*1.5}
+            else if(rangeOk[i]){
+                val width=rHigh[i]-rLow[i];val mid=(rHigh[i]+rLow[i])/2;val cp=(c[i]-l[i])/max(h[i]-l[i],MIN_TICK);val prevC=c[i-1]
+                val primaryLong=l[i]<=rLow[i]+width*.15&&c[i]<=rLow[i]+width*.35&&c[i]>rLow[i]&&c[i]>prevC&&c[i]>o[i]&&cp>=.50
+                val secondaryLong=l[i]<=rLow[i]+width*.24&&rsi[i-1]<45&&rsi[i]>rsi[i-1]&&c[i]>prevC&&c[i]>o[i]&&cp>=.55
+                val longStop=min(l[i]+ -a*.25,c[i]-a*.75);val validLong=mid>c[i]&&(mid-c[i])/(c[i]-longStop)>=1
+                val primaryShort=h[i]>=rHigh[i]-width*.15&&c[i]>=rHigh[i]-width*.35&&c[i]<rHigh[i]&&c[i]<prevC&&c[i]<o[i]&&cp<=.50
+                val secondaryShort=h[i]>=rHigh[i]-width*.24&&rsi[i-1]>55&&rsi[i]<rsi[i-1]&&c[i]<prevC&&c[i]<o[i]&&cp<=.45
+                val shortStop=max(h[i]+a*.25,c[i]+a*.75);val validShort=mid<c[i]&&(c[i]-mid)/(shortStop-c[i])>=1
+                if(validLong&&primaryLong){dir=1;cls="RANGE_PRIMARY";riskPct=.01}else if(validLong&&secondaryLong){dir=1;cls="RANGE_SECONDARY";riskPct=.0075}else if(validShort&&primaryShort){dir=-1;cls="RANGE_PRIMARY";riskPct=.01}else if(validShort&&secondaryShort){dir=-1;cls="RANGE_SECONDARY";riskPct=.0075}
+                if(dir!=0){stopPx=if(dir==1)longStop else shortStop;targetPx=mid}
+            }
+            if(dir!=0){val risk=abs(entry-stopPx);if(risk>0&&equity>0){val baseQty=(if(isTrend)equity*.01 else equity*riskPct)/risk;val qty=baseQty*SIZE_MULT;val type=if(dir==1)"LONG" else "SHORT";val sig=TradeSignal(id="ETHUSDT-4H-${closed[i].openTime}-$type",candleTime=closed[i].openTime,closeTime=closed[i].closeTime,type=type,entry=entry,regime=regime[i],classification=cls,stop=stopPx,target=targetPx,qty=qty,notional=qty*entry,status="OPEN",result=null,pnl=0.0,rMultiple=0.0,exitTime=0L,exitPrice=nan,notificationSent=false,createdAt=0L);sigs.add(sig);pos=Pos(sig,dir==1,isTrend,entry,risk,targetPx,stopPx,entry)}}
+        }
+        val last=n-1
+        return Analysis(display,n,ema50,ema200,regime[last],rHigh[last],rLow[last],(rHigh[last]+rLow[last])/2.0,sigs,pos?.sig)
+    }
+}
